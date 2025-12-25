@@ -1,0 +1,451 @@
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Users, UserPlus, Pencil, UserX, Loader2, Mail, Shield } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import type { Database } from '@/integrations/supabase/types';
+
+type PlatformRole = Database['public']['Enums']['platform_role'];
+
+interface TeamMember {
+  id: string;
+  user_id: string;
+  role: PlatformRole;
+  is_active: boolean;
+  joined_at: string;
+  profile: {
+    email: string;
+    full_name: string | null;
+  } | null;
+}
+
+interface TeamManagementProps {
+  companyId: string;
+  currentUserId: string;
+}
+
+const roleLabels: Record<string, string> = {
+  company_admin: 'Administrateur',
+  company_manager: 'Gestionnaire',
+  company_user: 'Utilisateur',
+};
+
+const roleOptions: { value: PlatformRole; label: string }[] = [
+  { value: 'company_admin', label: 'Administrateur' },
+  { value: 'company_manager', label: 'Gestionnaire' },
+  { value: 'company_user', label: 'Utilisateur' },
+];
+
+export function TeamManagement({ companyId, currentUserId }: TeamManagementProps) {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Invite form state
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteFullName, setInviteFullName] = useState('');
+  const [inviteRole, setInviteRole] = useState<PlatformRole>('company_user');
+  const [invitePassword, setInvitePassword] = useState('');
+
+  // Edit form state
+  const [editRole, setEditRole] = useState<PlatformRole>('company_user');
+
+  useEffect(() => {
+    fetchMembers();
+  }, [companyId]);
+
+  const fetchMembers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('company_members')
+        .select(`
+          id,
+          user_id,
+          role,
+          is_active,
+          joined_at,
+          profiles:user_id (
+            email,
+            full_name
+          )
+        `)
+        .eq('company_id', companyId)
+        .order('joined_at', { ascending: true });
+
+      if (error) throw error;
+
+      const formattedMembers: TeamMember[] = (data || []).map((member: any) => ({
+        id: member.id,
+        user_id: member.user_id,
+        role: member.role,
+        is_active: member.is_active,
+        joined_at: member.joined_at,
+        profile: member.profiles,
+      }));
+
+      setMembers(formattedMembers);
+    } catch (error) {
+      console.error('Error fetching members:', error);
+      toast.error('Erreur lors du chargement des membres');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleInvite = async () => {
+    if (!inviteEmail || !invitePassword) {
+      toast.error('Email et mot de passe requis');
+      return;
+    }
+
+    if (invitePassword.length < 6) {
+      toast.error('Le mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      // Create user account
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: inviteEmail,
+        password: invitePassword,
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            full_name: inviteFullName,
+          },
+        },
+      });
+
+      if (authError) throw authError;
+
+      if (!authData.user) {
+        throw new Error('Erreur lors de la création du compte');
+      }
+
+      // Wait a bit for the trigger to create the profile
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Add user to company
+      const { error: memberError } = await supabase
+        .from('company_members')
+        .insert({
+          company_id: companyId,
+          user_id: authData.user.id,
+          role: inviteRole,
+          invited_by: currentUserId,
+          is_active: true,
+        });
+
+      if (memberError) throw memberError;
+
+      toast.success('Collaborateur ajouté avec succès');
+      setInviteDialogOpen(false);
+      resetInviteForm();
+      fetchMembers();
+    } catch (error: any) {
+      console.error('Error inviting member:', error);
+      if (error.message?.includes('already registered')) {
+        toast.error('Cet email est déjà utilisé');
+      } else {
+        toast.error(error.message || 'Erreur lors de l\'ajout du collaborateur');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditRole = async () => {
+    if (!selectedMember) return;
+
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('company_members')
+        .update({ role: editRole })
+        .eq('id', selectedMember.id);
+
+      if (error) throw error;
+
+      toast.success('Rôle mis à jour');
+      setEditDialogOpen(false);
+      fetchMembers();
+    } catch (error) {
+      console.error('Error updating role:', error);
+      toast.error('Erreur lors de la mise à jour du rôle');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleActive = async () => {
+    if (!selectedMember) return;
+
+    setSaving(true);
+    try {
+      const newStatus = !selectedMember.is_active;
+      const { error } = await supabase
+        .from('company_members')
+        .update({ is_active: newStatus })
+        .eq('id', selectedMember.id);
+
+      if (error) throw error;
+
+      toast.success(newStatus ? 'Collaborateur réactivé' : 'Collaborateur désactivé');
+      setDeactivateDialogOpen(false);
+      fetchMembers();
+    } catch (error) {
+      console.error('Error toggling member status:', error);
+      toast.error('Erreur lors de la modification du statut');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetInviteForm = () => {
+    setInviteEmail('');
+    setInviteFullName('');
+    setInviteRole('company_user');
+    setInvitePassword('');
+  };
+
+  const openEditDialog = (member: TeamMember) => {
+    setSelectedMember(member);
+    setEditRole(member.role);
+    setEditDialogOpen(true);
+  };
+
+  const openDeactivateDialog = (member: TeamMember) => {
+    setSelectedMember(member);
+    setDeactivateDialogOpen(true);
+  };
+
+  if (loading) {
+    return (
+      <Card className="glass card-hover">
+        <CardContent className="p-6 flex items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      <Card className="glass card-hover">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              Équipe ({members.filter(m => m.is_active).length} actifs)
+            </CardTitle>
+            <Button size="sm" onClick={() => setInviteDialogOpen(true)}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Ajouter
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {members.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              Aucun membre dans l'équipe
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {members.map((member) => (
+                <div
+                  key={member.id}
+                  className={`flex items-center justify-between p-3 rounded-lg border ${
+                    member.is_active ? 'bg-card' : 'bg-muted/50 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2 rounded-full bg-primary/10">
+                      <Mail className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">
+                        {member.profile?.full_name || member.profile?.email || 'Utilisateur'}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {member.profile?.email}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={member.is_active ? 'secondary' : 'outline'} className="text-xs">
+                      {roleLabels[member.role] || member.role}
+                    </Badge>
+                    {!member.is_active && (
+                      <Badge variant="destructive" className="text-xs">Inactif</Badge>
+                    )}
+                    {member.user_id !== currentUserId && (
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEditDialog(member)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => openDeactivateDialog(member)}
+                        >
+                          <UserX className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Invite Dialog */}
+      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Ajouter un collaborateur</DialogTitle>
+            <DialogDescription>
+              Créez un compte pour un nouveau membre de l'équipe
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="invite-name">Nom complet</Label>
+              <Input
+                id="invite-name"
+                value={inviteFullName}
+                onChange={(e) => setInviteFullName(e.target.value)}
+                placeholder="Jean Dupont"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invite-email">Email *</Label>
+              <Input
+                id="invite-email"
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="collaborateur@exemple.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invite-password">Mot de passe *</Label>
+              <Input
+                id="invite-password"
+                type="password"
+                value={invitePassword}
+                onChange={(e) => setInvitePassword(e.target.value)}
+                placeholder="Minimum 6 caractères"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invite-role">Rôle</Label>
+              <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as PlatformRole)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {roleOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInviteDialogOpen(false)}>
+              Annuler
+            </Button>
+            <Button onClick={handleInvite} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Ajouter
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Role Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Modifier le rôle</DialogTitle>
+            <DialogDescription>
+              {selectedMember?.profile?.full_name || selectedMember?.profile?.email}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Label htmlFor="edit-role">Rôle</Label>
+            <Select value={editRole} onValueChange={(v) => setEditRole(v as PlatformRole)}>
+              <SelectTrigger className="mt-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {roleOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
+              Annuler
+            </Button>
+            <Button onClick={handleEditRole} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Enregistrer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Deactivate/Reactivate Dialog */}
+      <AlertDialog open={deactivateDialogOpen} onOpenChange={setDeactivateDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {selectedMember?.is_active ? 'Désactiver le collaborateur' : 'Réactiver le collaborateur'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {selectedMember?.is_active
+                ? `${selectedMember?.profile?.full_name || selectedMember?.profile?.email} ne pourra plus accéder à l'application.`
+                : `${selectedMember?.profile?.full_name || selectedMember?.profile?.email} pourra à nouveau accéder à l'application.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleToggleActive}
+              className={selectedMember?.is_active ? 'bg-destructive hover:bg-destructive/90' : ''}
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {selectedMember?.is_active ? 'Désactiver' : 'Réactiver'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
