@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { User, Shield, Mail, Database, Loader2, Building2, Crown, Users, ChevronRight } from 'lucide-react';
-import { seedDemoData } from '@/lib/seedDemoData';
 import { toast } from 'sonner';
 
 const roleLabels: Record<string, string> = {
@@ -22,25 +21,8 @@ export default function Settings() {
   const [seeding, setSeeding] = useState(false);
 
   const handleSeedData = async (force: boolean = false) => {
-    if (!user?.id || !companyId) {
-      toast.error('Vous devez être membre d\'une entreprise pour générer des données');
-      return;
-    }
-    
-    setSeeding(true);
-    try {
-      const result = await seedDemoData(companyId, user.id, force);
-      if (result.success) {
-        toast.success(result.message);
-        window.location.reload();
-      } else {
-        toast.error(result.message);
-      }
-    } catch (error) {
-      toast.error('Erreur lors de la création des données');
-    } finally {
-      setSeeding(false);
-    }
+    // TODO: Implémenter la génération de données de test via l'API backend
+    toast.info('Fonctionnalité en cours de développement');
   };
 
   const canManageTeam = companyRole === 'company_admin';

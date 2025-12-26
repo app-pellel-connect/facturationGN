@@ -1,26 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { clientsApi, type Client, type CreateClientData } from '@/lib/api/clients';
 import { useAuth } from './useAuth';
 import { toast } from 'sonner';
 import { queryKeys } from '@/lib/queryKeys';
 
-export interface Client {
-  id: string;
-  company_id: string;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  city: string | null;
-  postal_code: string | null;
-  country: string | null;
-  siret: string | null;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export type ClientInput = Omit<Client, 'id' | 'company_id' | 'created_by' | 'created_at' | 'updated_at'>;
+export type { Client } from '@/lib/api/clients';
+export type ClientInput = CreateClientData;
 
 export function useClients() {
   const { user, companyId } = useAuth();
@@ -29,13 +14,7 @@ export function useClients() {
   const clientsQuery = useQuery({
     queryKey: queryKeys.clients.byCompany(companyId ?? ''),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      return data as Client[];
+      return clientsApi.getAll(companyId || undefined);
     },
     enabled: !!user && !!companyId,
     staleTime: 5 * 60 * 1000, // 5 minutes
@@ -46,18 +25,7 @@ export function useClients() {
     mutationFn: async (input: ClientInput) => {
       if (!companyId) throw new Error('No company selected');
       
-      const { data, error } = await supabase
-        .from('clients')
-        .insert({ 
-          ...input, 
-          company_id: companyId,
-          created_by: user!.id 
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      return clientsApi.create(input, companyId);
     },
     onMutate: async (newClient) => {
       // Cancel any outgoing refetches
@@ -69,9 +37,16 @@ export function useClients() {
       // Optimistically update to the new value
       if (previousClients) {
         const optimisticClient: Client = {
-          ...newClient,
-          id: `temp-${Date.now()}`,
+          id: crypto.randomUUID(),
           company_id: companyId!,
+          name: newClient.name,
+          email: newClient.email ?? null,
+          phone: newClient.phone ?? null,
+          address: newClient.address ?? null,
+          city: newClient.city ?? null,
+          postal_code: newClient.postal_code ?? null,
+          country: newClient.country ?? 'Guinée',
+          siret: newClient.siret ?? null,
           created_by: user!.id,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -103,15 +78,7 @@ export function useClients() {
 
   const updateClient = useMutation({
     mutationFn: async ({ id, ...input }: Partial<Client> & { id: string }) => {
-      const { data, error } = await supabase
-        .from('clients')
-        .update(input)
-        .eq('id', id)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      return clientsApi.update(id, input);
     },
     onMutate: async (updatedClient) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.clients.byCompany(companyId ?? '') });
@@ -147,12 +114,7 @@ export function useClients() {
 
   const deleteClient = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('clients')
-        .delete()
-        .eq('id', id);
-      
-      if (error) throw error;
+      return clientsApi.delete(id);
     },
     onMutate: async (deletedId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.clients.byCompany(companyId ?? '') });

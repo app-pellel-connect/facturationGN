@@ -1,51 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { invoicesApi, type Invoice, type InvoiceItem, type CreateInvoiceData } from '@/lib/api/invoices';
 import { useAuth } from './useAuth';
 import { toast } from 'sonner';
 import { queryKeys } from '@/lib/queryKeys';
 
-export interface InvoiceItem {
-  id: string;
-  invoice_id: string;
-  description: string;
-  quantity: number;
-  unit_price: number;
-  total: number;
-  created_at: string;
-}
-
-export interface Invoice {
-  id: string;
-  company_id: string;
-  client_id: string | null;
-  invoice_number: string;
-  status: 'draft' | 'sent' | 'partial' | 'paid' | 'cancelled';
-  issue_date: string;
-  due_date: string | null;
-  subtotal: number;
-  tax_rate: number;
-  tax_amount: number;
-  total: number;
-  paid_amount: number;
-  balance: number;
-  notes: string | null;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
-  clients?: { name: string } | null;
-  invoice_items?: InvoiceItem[];
-}
-
-export type InvoiceInput = {
-  client_id: string | null;
-  invoice_number: string;
-  status?: 'draft' | 'sent' | 'partial' | 'paid' | 'cancelled';
-  issue_date?: string;
-  due_date?: string | null;
-  notes?: string | null;
-  tax_rate?: number;
-  items: Omit<InvoiceItem, 'id' | 'invoice_id' | 'created_at'>[];
-};
+export type { Invoice, InvoiceItem } from '@/lib/api/invoices';
+export type InvoiceInput = CreateInvoiceData;
 
 export function useInvoices() {
   const { user, companyId } = useAuth();
@@ -57,17 +17,7 @@ export function useInvoices() {
   const invoicesQuery = useQuery({
     queryKey: queryKeys.invoices.byCompany(companyId ?? ''),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('invoices')
-        .select(`
-          *,
-          clients(name),
-          invoice_items(*)
-        `)
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      return data as Invoice[];
+      return invoicesApi.getAll(companyId || undefined);
     },
     enabled: !!user && !!companyId,
     staleTime: 2 * 60 * 1000, // 2 minutes
@@ -78,39 +28,7 @@ export function useInvoices() {
     mutationFn: async (input: InvoiceInput) => {
       if (!companyId) throw new Error('No company selected');
       
-      const { items, ...invoiceData } = input;
-      
-      // Calculate totals
-      const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-      const taxRate = input.tax_rate ?? defaultTaxRate;
-      const taxAmount = subtotal * (taxRate / 100);
-      const total = subtotal + taxAmount;
-
-      const { data: invoice, error: invoiceError } = await supabase
-        .from('invoices')
-        .insert({
-          ...invoiceData,
-          company_id: companyId,
-          created_by: user!.id,
-          subtotal,
-          tax_rate: taxRate,
-          tax_amount: taxAmount,
-          total,
-        })
-        .select()
-        .single();
-      
-      if (invoiceError) throw invoiceError;
-
-      if (items.length > 0) {
-        const { error: itemsError } = await supabase
-          .from('invoice_items')
-          .insert(items.map(item => ({ ...item, invoice_id: invoice.id })));
-        
-        if (itemsError) throw itemsError;
-      }
-
-      return invoice;
+      return invoicesApi.create(input, companyId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.invoices.byCompany(companyId ?? '') });
@@ -123,15 +41,7 @@ export function useInvoices() {
 
   const updateInvoiceStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: Invoice['status'] }) => {
-      const { data, error } = await supabase
-        .from('invoices')
-        .update({ status })
-        .eq('id', id)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      return invoicesApi.update(id, { status });
     },
     onMutate: async ({ id, status }) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.invoices.byCompany(companyId ?? '') });
@@ -165,12 +75,7 @@ export function useInvoices() {
 
   const deleteInvoice = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('invoices')
-        .delete()
-        .eq('id', id);
-      
-      if (error) throw error;
+      return invoicesApi.delete(id);
     },
     onMutate: async (deletedId) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.invoices.byCompany(companyId ?? '') });

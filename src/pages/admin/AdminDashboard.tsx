@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/hooks/useAuth';
-import { supabase } from '@/integrations/supabase/client';
+import { useNavigate } from 'react-router-dom';
+import { companiesApi } from '@/lib/api/companies';
+import { subscriptionsApi } from '@/lib/api/subscriptions';
+import { auditApi } from '@/lib/api/audit';
+import { adminApi } from '@/lib/api/admin';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -75,8 +79,14 @@ interface Stats {
 }
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const { user, profile, signOut } = useAuth();
   const [companies, setCompanies] = useState<Company[]>([]);
+  
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/auth');
+  };
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [stats, setStats] = useState<Stats>({
@@ -101,50 +111,20 @@ export default function AdminDashboard() {
     setLoading(true);
     try {
       // Fetch companies
-      const { data: companiesData, error: companiesError } = await supabase
-        .from('companies')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const companiesData = await companiesApi.getAll();
+      setCompanies(companiesData);
 
-      if (companiesError) throw companiesError;
-      setCompanies(companiesData || []);
-
-      // Calculate company stats
-      const pending = companiesData?.filter(c => c.status === 'pending').length || 0;
-      const approved = companiesData?.filter(c => c.status === 'approved').length || 0;
-      const suspended = companiesData?.filter(c => c.status === 'suspended').length || 0;
-      const rejected = companiesData?.filter(c => c.status === 'rejected').length || 0;
-
-      // Fetch total users
-      const { count: usersCount } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true });
+      // Fetch stats
+      const statsData = await adminApi.getStats();
+      setStats(statsData);
 
       // Fetch subscriptions
-      const { data: subsData } = await supabase
-        .from('subscriptions')
-        .select('*, company:companies(name)')
-        .order('created_at', { ascending: false });
-
-      setSubscriptions(subsData || []);
+      const subsData = await subscriptionsApi.getAll();
+      setSubscriptions(subsData);
 
       // Fetch audit logs
-      const { data: logsData } = await supabase
-        .from('audit_logs')
-        .select('*, profile:profiles(full_name, email), company:companies(name)')
-        .order('created_at', { ascending: false })
-        .limit(50);
-
-      setAuditLogs(logsData || []);
-
-      setStats({
-        totalCompanies: companiesData?.length || 0,
-        pendingCompanies: pending,
-        approvedCompanies: approved,
-        suspendedCompanies: suspended,
-        rejectedCompanies: rejected,
-        totalUsers: usersCount || 0,
-      });
+      const logsData = await auditApi.getAll(50);
+      setAuditLogs(logsData);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Erreur lors du chargement des données');
@@ -162,24 +142,9 @@ export default function AdminDashboard() {
     try {
       const newStatus = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'suspended';
       
-      const { error } = await supabase
-        .from('companies')
-        .update({ 
-          status: newStatus,
-          approved_at: action === 'approve' ? new Date().toISOString() : null,
-          approved_by: action === 'approve' ? user?.id : null,
-        })
-        .eq('id', companyId);
-
-      if (error) throw error;
-
-      // Log the action
-      await supabase.from('audit_logs').insert({
-        user_id: user?.id,
-        company_id: companyId,
-        action: `company_${action}d`,
-        entity_type: 'company',
-        entity_id: companyId,
+      await companiesApi.update(companyId, {
+        status: newStatus,
+        rejection_reason: action === 'reject' ? 'Rejetée par l\'administrateur' : undefined,
       });
 
       toast.success(
@@ -206,24 +171,21 @@ export default function AdminDashboard() {
       max_clients: number;
     }
   ) => {
-    const { error } = await supabase
-      .from('subscriptions')
-      .update({
+    try {
+      await subscriptionsApi.update(subscriptionId, {
         plan_name: data.plan_name,
         status: data.status as 'trial' | 'active' | 'expired' | 'cancelled',
         max_users: data.max_users,
         max_invoices_per_month: data.max_invoices_per_month,
         max_clients: data.max_clients,
-      })
-      .eq('id', subscriptionId);
+      });
 
-    if (error) {
+      toast.success('Abonnement mis à jour avec succès');
+      fetchData();
+    } catch (error) {
       toast.error('Erreur lors de la mise à jour de l\'abonnement');
       throw error;
     }
-
-    toast.success('Abonnement mis à jour avec succès');
-    fetchData();
   };
 
   const openEditSubscription = (subscription: Subscription) => {
@@ -251,37 +213,26 @@ export default function AdminDashboard() {
       address: string | null;
     }
   ) => {
-    const { error } = await supabase
-      .from('companies')
-      .update(data)
-      .eq('id', companyId);
-
-    if (error) {
+    try {
+      await companiesApi.update(companyId, data);
+      toast.success('Entreprise mise à jour avec succès');
+      fetchData();
+    } catch (error) {
       toast.error('Erreur lors de la mise à jour de l\'entreprise');
       throw error;
     }
-
-    toast.success('Entreprise mise à jour avec succès');
-    fetchData();
   };
 
   const handleDeleteCompany = async (companyId: string) => {
-    // First delete related data (company_members, subscriptions)
-    await supabase.from('company_members').delete().eq('company_id', companyId);
-    await supabase.from('subscriptions').delete().eq('company_id', companyId);
-    
-    const { error } = await supabase
-      .from('companies')
-      .delete()
-      .eq('id', companyId);
-
-    if (error) {
+    try {
+      // La suppression en cascade gère automatiquement les relations
+      await companiesApi.delete(companyId);
+      toast.success('Entreprise supprimée avec succès');
+      fetchData();
+    } catch (error) {
       toast.error('Erreur lors de la suppression de l\'entreprise');
       throw error;
     }
-
-    toast.success('Entreprise supprimée avec succès');
-    fetchData();
   };
 
   const getStatusBadge = (status: string) => {
@@ -344,7 +295,7 @@ export default function AdminDashboard() {
                   <p className="text-sm text-muted-foreground">Propriétaire de la plateforme</p>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" onClick={signOut}>
+              <Button variant="ghost" size="sm" onClick={handleSignOut}>
                 Déconnexion
               </Button>
             </div>

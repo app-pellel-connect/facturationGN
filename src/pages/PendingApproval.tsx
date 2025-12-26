@@ -1,10 +1,17 @@
 import { useAuth } from '@/hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Clock, FileText, Mail, RefreshCw, LogOut, Phone, MessageSquare } from 'lucide-react';
 
 export default function PendingApproval() {
+  const navigate = useNavigate();
   const { companyMembership, signOut, refreshProfile } = useAuth();
+  
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/auth');
+  };
 
   const handleRefresh = async () => {
     await refreshProfile();
@@ -72,7 +79,7 @@ export default function PendingApproval() {
                 <RefreshCw className="h-4 w-4" />
                 Vérifier le statut
               </Button>
-              <Button onClick={signOut} variant="ghost" className="w-full gap-2 text-muted-foreground">
+              <Button onClick={handleSignOut} variant="ghost" className="w-full gap-2 text-muted-foreground">
                 <LogOut className="h-4 w-4" />
                 Se déconnecter
               </Button>

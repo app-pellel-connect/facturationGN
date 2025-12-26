@@ -1,0 +1,6 @@
+{
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@vercel/node": "^5.5.16"
+  }
+}

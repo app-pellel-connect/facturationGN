@@ -1,29 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { paymentsApi, type Payment, type CreatePaymentData } from '@/lib/api/payments';
 import { useAuth } from './useAuth';
 import { toast } from 'sonner';
 import { queryKeys } from '@/lib/queryKeys';
 
-export interface Payment {
-  id: string;
-  invoice_id: string;
-  recorded_by: string | null;
-  amount: number;
+export type { Payment } from '@/lib/api/payments';
+export type PaymentInput = CreatePaymentData & {
   payment_type: 'deposit' | 'partial' | 'full' | 'balance';
-  payment_method: 'cash' | 'mobile_money' | 'bank_transfer' | 'check' | 'other';
-  reference: string | null;
-  notes: string | null;
-  paid_at: string;
-  created_at: string;
-}
-
-export type PaymentInput = {
-  invoice_id: string;
-  amount: number;
-  payment_type: Payment['payment_type'];
-  payment_method?: Payment['payment_method'];
-  reference?: string;
-  notes?: string;
 };
 
 const paymentTypeLabels: Record<Payment['payment_type'], string> = {
@@ -52,18 +35,10 @@ export function usePayments(invoiceId?: string) {
   const paymentsQuery = useQuery({
     queryKey,
     queryFn: async () => {
-      let query = supabase
-        .from('payments')
-        .select('*')
-        .order('paid_at', { ascending: false });
-      
       if (invoiceId) {
-        query = query.eq('invoice_id', invoiceId);
+        return paymentsApi.getByInvoice(invoiceId);
       }
-      
-      const { data, error } = await query;
-      if (error) throw error;
-      return data as Payment[];
+      return [];
     },
     enabled: !!user && !!companyId && (!!invoiceId || invoiceId === undefined),
     staleTime: 2 * 60 * 1000, // 2 minutes
@@ -72,17 +47,14 @@ export function usePayments(invoiceId?: string) {
 
   const createPayment = useMutation({
     mutationFn: async (input: PaymentInput) => {
-      const { data, error } = await supabase
-        .from('payments')
-        .insert({
-          ...input,
-          recorded_by: user!.id,
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      return paymentsApi.create({
+        invoice_id: input.invoice_id,
+        amount: input.amount,
+        payment_method: input.payment_method || 'cash',
+        payment_type: input.payment_type === 'full' ? 'full' : 'partial',
+        reference: input.reference || null,
+        notes: input.notes || null,
+      });
     },
     onMutate: async (newPayment) => {
       const currentQueryKey = queryKeys.payments.byInvoice(newPayment.invoice_id);
@@ -93,7 +65,7 @@ export function usePayments(invoiceId?: string) {
       if (previousPayments) {
         const optimisticPayment: Payment = {
           ...newPayment,
-          id: `temp-${Date.now()}`,
+          id: crypto.randomUUID(),
           recorded_by: user!.id,
           reference: newPayment.reference ?? null,
           notes: newPayment.notes ?? null,
@@ -127,12 +99,7 @@ export function usePayments(invoiceId?: string) {
 
   const deletePayment = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('payments')
-        .delete()
-        .eq('id', id);
-      
-      if (error) throw error;
+      return paymentsApi.delete(id);
     },
     onMutate: async (deletedId) => {
       await queryClient.cancelQueries({ queryKey });

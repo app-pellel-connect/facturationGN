@@ -1,10 +1,17 @@
 import { useAuth } from '@/hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { AlertTriangle, FileText, LogOut, Mail } from 'lucide-react';
 
 export default function CompanySuspended() {
+  const navigate = useNavigate();
   const { companyMembership, signOut } = useAuth();
+  
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/auth');
+  };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
@@ -44,7 +51,7 @@ export default function CompanySuspended() {
             </div>
 
             <div className="pt-4">
-              <Button onClick={signOut} variant="outline" className="w-full gap-2">
+              <Button onClick={handleSignOut} variant="outline" className="w-full gap-2">
                 <LogOut className="h-4 w-4" />
                 Se déconnecter
               </Button>

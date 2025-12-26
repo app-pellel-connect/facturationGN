@@ -1,10 +1,14 @@
-import { createContext, useContext, useEffect, ReactNode } from 'react';
-import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '@/integrations/supabase/client';
+import { createContext, useContext, useEffect, ReactNode, useState } from 'react';
+import { authApi, type ProfileResponse } from '@/lib/api/auth';
 import { useAuthStore, PlatformRole } from '@/stores';
 
 // Re-export PlatformRole for backward compatibility
 export type { PlatformRole } from '@/stores';
+
+interface User {
+  id: string;
+  email: string;
+}
 
 interface Profile {
   id: string;
@@ -28,6 +32,11 @@ interface CompanyMembership {
     status: 'pending' | 'approved' | 'suspended' | 'rejected';
     logo_url: string | null;
   };
+}
+
+interface Session {
+  token: string;
+  refreshToken: string;
 }
 
 interface AuthContextType {
@@ -72,104 +81,134 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canManageCompany,
   } = useAuthStore();
 
-  const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-    
-    if (data) {
-      setProfile(data as any);
-    }
-  };
+  const [isInitialized, setIsInitialized] = useState(false);
 
-  const fetchCompanyMembership = async (userId: string) => {
-    const { data } = await supabase
-      .from('company_members')
-      .select(`
-        *,
-        company:companies(id, name, status, logo_url)
-      `)
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .maybeSingle();
-    
-    if (data) {
-      setCompanyMembership(data as any);
-    } else {
+  const fetchProfile = async () => {
+    try {
+      const data: ProfileResponse = await authApi.getProfile();
+      
+      const userData: User = {
+        id: data.user.id,
+        email: data.user.email,
+      };
+      
+      setUser(userData);
+      setProfile({
+        id: data.user.id,
+        email: data.user.email,
+        full_name: data.user.full_name,
+        phone: data.user.phone,
+        avatar_url: data.user.avatar_url,
+        is_platform_owner: data.user.is_platform_owner,
+        created_at: '',
+        updated_at: '',
+      });
+
+      if (data.company) {
+        setCompanyMembership({
+          id: '',
+          company_id: data.company.id,
+          role: data.company.role as PlatformRole,
+          is_active: true,
+          company: {
+            id: data.company.id,
+            name: data.company.name,
+            status: data.company.status as any,
+            logo_url: null,
+          },
+        });
+      } else {
+        setCompanyMembership(null);
+      }
+    } catch (error) {
+      console.error('Error fetching profile:', error);
+      setUser(null);
+      setProfile(null);
       setCompanyMembership(null);
     }
   };
 
   const refreshProfile = async () => {
-    if (user?.id) {
-      await Promise.all([
-        fetchProfile(user.id),
-        fetchCompanyMembership(user.id)
-      ]);
-    }
+    await fetchProfile();
   };
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          setTimeout(() => {
-            fetchProfile(session.user.id);
-            fetchCompanyMembership(session.user.id);
-          }, 0);
-        } else {
-          setProfile(null);
-          setCompanyMembership(null);
-        }
-        
-        setLoading(false);
-        setInitialized(true);
-      }
-    );
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
+    const initAuth = async () => {
+      setLoading(true);
       
-      if (session?.user) {
-        fetchProfile(session.user.id);
-        fetchCompanyMembership(session.user.id);
+      // Vérifier si un token existe
+      const token = localStorage.getItem('auth_token');
+      
+      if (token) {
+        try {
+          await fetchProfile();
+        } catch (error) {
+          // Token invalide, nettoyer
+          authApi.signOut();
+          reset();
+        }
+      } else {
+        reset();
       }
       
       setLoading(false);
       setInitialized(true);
-    });
+      setIsInitialized(true);
+    };
 
-    return () => subscription.unsubscribe();
+    initAuth();
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error };
+    try {
+      const response = await authApi.signIn({ email, password });
+      
+      const userData: User = {
+        id: response.user.id,
+        email: response.user.email,
+      };
+      
+      setUser(userData);
+      setSession({
+        token: response.token,
+        refreshToken: response.refreshToken,
+      });
+      
+      await fetchProfile();
+      
+      return { error: null };
+    } catch (error: any) {
+      return { error: error as Error };
+    }
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
-    const redirectUrl = `${window.location.origin}/`;
-    
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: redirectUrl,
-        data: { full_name: fullName }
-      }
-    });
-    return { error };
+    try {
+      const response = await authApi.signUp({ email, password, full_name: fullName });
+      
+      const userData: User = {
+        id: response.user.id,
+        email: response.user.email,
+      };
+      
+      setUser(userData);
+      setSession({
+        token: response.token,
+        refreshToken: response.refreshToken,
+      });
+      
+      await fetchProfile();
+      
+      return { error: null };
+    } catch (error: any) {
+      return { error: error as Error };
+    }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    authApi.signOut();
     reset();
+    // Redirection sera gérée par le composant qui appelle signOut
   };
 
   return (

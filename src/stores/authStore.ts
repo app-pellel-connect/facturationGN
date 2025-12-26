@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { User, Session } from '@supabase/supabase-js';
 
 export type PlatformRole = 'platform_owner' | 'company_admin' | 'company_manager' | 'company_user';
 
@@ -26,6 +25,16 @@ interface CompanyMembership {
     status: 'pending' | 'approved' | 'suspended' | 'rejected';
     logo_url: string | null;
   };
+}
+
+interface User {
+  id: string;
+  email: string;
+}
+
+interface Session {
+  token: string;
+  refreshToken: string;
 }
 
 interface AuthState {

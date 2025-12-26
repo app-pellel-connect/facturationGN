@@ -8,11 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Users, UserPlus, Pencil, UserX, Loader2, Mail, Shield } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import type { Database } from '@/integrations/supabase/types';
-
-type PlatformRole = Database['public']['Enums']['platform_role'];
+import { useTeamMembers, type PlatformRole } from '@/hooks/useTeamMembers';
 
 interface TeamMember {
   id: string;
@@ -44,8 +41,7 @@ const roleOptions: { value: PlatformRole; label: string }[] = [
 ];
 
 export function TeamManagement({ companyId, currentUserId }: TeamManagementProps) {
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { members, isLoading, createMember, updateMember, toggleMemberStatus } = useTeamMembers();
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
@@ -61,48 +57,6 @@ export function TeamManagement({ companyId, currentUserId }: TeamManagementProps
   // Edit form state
   const [editRole, setEditRole] = useState<PlatformRole>('company_user');
 
-  useEffect(() => {
-    fetchMembers();
-  }, [companyId]);
-
-  const fetchMembers = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('company_members')
-        .select(`
-          id,
-          user_id,
-          role,
-          is_active,
-          joined_at,
-          profiles:user_id (
-            email,
-            full_name
-          )
-        `)
-        .eq('company_id', companyId)
-        .order('joined_at', { ascending: true });
-
-      if (error) throw error;
-
-      const formattedMembers: TeamMember[] = (data || []).map((member: any) => ({
-        id: member.id,
-        user_id: member.user_id,
-        role: member.role,
-        is_active: member.is_active,
-        joined_at: member.joined_at,
-        profile: member.profiles,
-      }));
-
-      setMembers(formattedMembers);
-    } catch (error) {
-      console.error('Error fetching members:', error);
-      toast.error('Erreur lors du chargement des membres');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleInvite = async () => {
     if (!inviteEmail || !invitePassword) {
       toast.error('Email et mot de passe requis');
@@ -116,51 +70,17 @@ export function TeamManagement({ companyId, currentUserId }: TeamManagementProps
 
     setSaving(true);
     try {
-      // Create user account
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      await createMember.mutateAsync({
         email: inviteEmail,
         password: invitePassword,
-        options: {
-          emailRedirectTo: `${window.location.origin}/`,
-          data: {
-            full_name: inviteFullName,
-          },
-        },
+        full_name: inviteFullName || undefined,
+        role: inviteRole,
       });
 
-      if (authError) throw authError;
-
-      if (!authData.user) {
-        throw new Error('Erreur lors de la création du compte');
-      }
-
-      // Wait a bit for the trigger to create the profile
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Add user to company
-      const { error: memberError } = await supabase
-        .from('company_members')
-        .insert({
-          company_id: companyId,
-          user_id: authData.user.id,
-          role: inviteRole,
-          invited_by: currentUserId,
-          is_active: true,
-        });
-
-      if (memberError) throw memberError;
-
-      toast.success('Collaborateur ajouté avec succès');
       setInviteDialogOpen(false);
       resetInviteForm();
-      fetchMembers();
     } catch (error: any) {
-      console.error('Error inviting member:', error);
-      if (error.message?.includes('already registered')) {
-        toast.error('Cet email est déjà utilisé');
-      } else {
-        toast.error(error.message || 'Erreur lors de l\'ajout du collaborateur');
-      }
+      // Error is already handled by the mutation
     } finally {
       setSaving(false);
     }
@@ -171,19 +91,14 @@ export function TeamManagement({ companyId, currentUserId }: TeamManagementProps
 
     setSaving(true);
     try {
-      const { error } = await supabase
-        .from('company_members')
-        .update({ role: editRole })
-        .eq('id', selectedMember.id);
+      await updateMember.mutateAsync({
+        id: selectedMember.id,
+        role: editRole,
+      });
 
-      if (error) throw error;
-
-      toast.success('Rôle mis à jour');
       setEditDialogOpen(false);
-      fetchMembers();
     } catch (error) {
-      console.error('Error updating role:', error);
-      toast.error('Erreur lors de la mise à jour du rôle');
+      // Error is already handled by the mutation
     } finally {
       setSaving(false);
     }
@@ -194,20 +109,10 @@ export function TeamManagement({ companyId, currentUserId }: TeamManagementProps
 
     setSaving(true);
     try {
-      const newStatus = !selectedMember.is_active;
-      const { error } = await supabase
-        .from('company_members')
-        .update({ is_active: newStatus })
-        .eq('id', selectedMember.id);
-
-      if (error) throw error;
-
-      toast.success(newStatus ? 'Collaborateur réactivé' : 'Collaborateur désactivé');
+      await toggleMemberStatus.mutateAsync(selectedMember);
       setDeactivateDialogOpen(false);
-      fetchMembers();
     } catch (error) {
-      console.error('Error toggling member status:', error);
-      toast.error('Erreur lors de la modification du statut');
+      // Error is already handled by the mutation
     } finally {
       setSaving(false);
     }
@@ -231,7 +136,7 @@ export function TeamManagement({ companyId, currentUserId }: TeamManagementProps
     setDeactivateDialogOpen(true);
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <Card className="glass card-hover">
         <CardContent className="p-6 flex items-center justify-center">

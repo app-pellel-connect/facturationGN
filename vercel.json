@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "buildCommand": "cd backend && npm run build && cd .. && npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "installCommand": "npm install --include=dev && cd backend && npm install && cd ..",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    }
+  ]
+}
+

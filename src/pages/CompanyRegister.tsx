@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { supabase } from '@/integrations/supabase/client';
+import { companiesApi } from '@/lib/api/companies';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -44,16 +44,15 @@ export default function CompanyRegister() {
 
     setLoading(true);
     try {
-      // Use the register_company function that handles everything atomically
-      const { data: companyId, error } = await supabase.rpc('register_company', {
-        p_user_id: user.id,
-        p_name: form.name,
-        p_phone: form.phone,
-        p_address: form.address,
-        p_city: form.city,
+      // Créer l'entreprise via l'API
+      await companiesApi.create({
+        name: form.name,
+        email: user.email,
+        phone: form.phone,
+        address: form.address,
+        city: form.city,
+        country: 'Guinée',
       });
-
-      if (error) throw error;
 
       toast.success('Entreprise enregistrée ! En attente d\'approbation.');
       

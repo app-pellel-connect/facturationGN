@@ -51,7 +51,7 @@ Le **premier utilisateur inscrit** devient automatiquement propriétaire de la p
 ## 🛠️ Technologies
 
 - **Frontend** : React + TypeScript + Tailwind CSS + shadcn/ui
-- **Backend** : Supabase (PostgreSQL + Auth + RLS)
+- **Backend** : Node.js/Express + PostgreSQL + JWT
 - **Devise** : Franc Guinéen (GNF)
 - **Build** : Vite
 

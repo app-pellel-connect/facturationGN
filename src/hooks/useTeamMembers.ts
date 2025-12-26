@@ -1,40 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { teamApi, type TeamMember, type CreateMemberData, type UpdateMemberData, type PlatformRole } from '@/lib/api/team';
 import { useAuth } from './useAuth';
 import { toast } from 'sonner';
 import { queryKeys } from '@/lib/queryKeys';
-import type { Database } from '@/integrations/supabase/types';
 
-export type PlatformRole = Database['public']['Enums']['platform_role'];
+export type { PlatformRole } from '@/lib/api/team';
 
-export interface TeamMember {
-  id: string;
-  user_id: string;
-  company_id: string;
-  role: PlatformRole;
-  is_active: boolean;
-  joined_at: string;
-  invited_by: string | null;
-  created_at: string;
-  profile: {
-    email: string;
-    full_name: string | null;
-    phone: string | null;
-  } | null;
-}
-
-export interface CreateMemberInput {
-  email: string;
-  password: string;
-  full_name?: string;
-  role: PlatformRole;
-}
-
-export interface UpdateMemberInput {
-  id: string;
-  role?: PlatformRole;
-  is_active?: boolean;
-}
+export type { TeamMember } from '@/lib/api/team';
+export type CreateMemberInput = CreateMemberData;
+export type UpdateMemberInput = UpdateMemberData & { id: string };
 
 const roleLabels: Record<string, string> = {
   platform_owner: 'Propriétaire',
@@ -60,31 +34,14 @@ export function useTeamMembers() {
     queryFn: async () => {
       if (!companyId) return [];
       
-      const { data, error } = await supabase
-        .from('company_members')
-        .select(`
-          id,
-          user_id,
-          company_id,
-          role,
-          is_active,
-          joined_at,
-          invited_by,
-          created_at,
-          profiles:user_id (
-            email,
-            full_name,
-            phone
-          )
-        `)
-        .eq('company_id', companyId)
-        .order('joined_at', { ascending: true });
-
-      if (error) throw error;
-
-      return (data || []).map((member: any) => ({
+      const members = await teamApi.getAll(companyId);
+      return members.map(member => ({
         ...member,
-        profile: member.profiles,
+        profile: {
+          email: member.email,
+          full_name: member.full_name,
+          phone: member.phone,
+        },
       })) as TeamMember[];
     },
     enabled: !!user && !!companyId,
@@ -96,34 +53,15 @@ export function useTeamMembers() {
     mutationFn: async (input: CreateMemberInput) => {
       if (!companyId || !user) throw new Error('No company selected');
 
-      // Ensure we send a real user JWT (otherwise invoke falls back to anon key -> Invalid JWT)
-      let accessToken = session?.access_token;
-      if (!accessToken) {
-        const { data } = await supabase.auth.getSession();
-        accessToken = data.session?.access_token;
-      }
-      if (!accessToken) {
-        throw new Error('Session expirée. Veuillez vous reconnecter.');
-      }
-
-      const { data, error } = await supabase.functions.invoke('create-team-member', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
+      const member = await teamApi.create(input, companyId);
+      return {
+        ...member,
+        profile: {
+          email: member.email,
+          full_name: member.full_name,
+          phone: member.phone,
         },
-        body: {
-          email: input.email,
-          password: input.password,
-          full_name: input.full_name,
-          role: input.role,
-          company_id: companyId,
-          invited_by: user.id,
-        },
-      });
-
-      if (error) throw error;
-      if (data?.error) throw new Error(data.error);
-
-      return data.member;
+      } as TeamMember;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
@@ -138,15 +76,15 @@ export function useTeamMembers() {
     mutationFn: async (input: UpdateMemberInput) => {
       const { id, ...updates } = input;
       
-      const { data, error } = await supabase
-        .from('company_members')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      return data;
+      const member = await teamApi.update(id, updates);
+      return {
+        ...member,
+        profile: {
+          email: member.email,
+          full_name: member.full_name,
+          phone: member.phone,
+        },
+      } as TeamMember;
     },
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey });
@@ -186,15 +124,11 @@ export function useTeamMembers() {
 
   const toggleMemberStatus = useMutation({
     mutationFn: async (member: TeamMember) => {
-      const { data, error } = await supabase
-        .from('company_members')
-        .update({ is_active: !member.is_active })
-        .eq('id', member.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      return data;
+      const updated = await teamApi.update(member.id, { is_active: !member.is_active });
+      return {
+        ...updated,
+        profile: member.profile,
+      } as TeamMember;
     },
     onMutate: async (member) => {
       await queryClient.cancelQueries({ queryKey });

@@ -1,10 +1,17 @@
 import { useAuth } from '@/hooks/useAuth';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { XCircle, FileText, LogOut, RefreshCw } from 'lucide-react';
 
 export default function CompanyRejected() {
+  const navigate = useNavigate();
   const { companyMembership, signOut, refreshProfile } = useAuth();
+  
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/auth');
+  };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
@@ -45,7 +52,7 @@ export default function CompanyRejected() {
                 <RefreshCw className="h-4 w-4" />
                 Vérifier à nouveau
               </Button>
-              <Button onClick={signOut} variant="ghost" className="w-full gap-2 text-muted-foreground">
+              <Button onClick={handleSignOut} variant="ghost" className="w-full gap-2 text-muted-foreground">
                 <LogOut className="h-4 w-4" />
                 Se déconnecter
               </Button>
